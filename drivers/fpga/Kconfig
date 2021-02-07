@@ -207,6 +207,14 @@ config FPGA_DFL_PCI
 
 	  To compile this as a module, choose M here.
 
+config FPGA_DFL_VIRTIO
+    tristate "FPGA DFL Virtio Device Driver"
+    depends on VIRTIO && VIRTIO_MENU && MMU && FPGA_DFL
+    help
+        Select the option to enable virtio driver for API-forwarding
+        based FPGA solutions which implement the Device Feature List(DFL)
+
+
 config FPGA_MGR_ZYNQMP_FPGA
 	tristate "Xilinx ZynqMP FPGA"
 	depends on ZYNQMP_FIRMWARE || (!ZYNQMP_FIRMWARE && COMPILE_TEST)

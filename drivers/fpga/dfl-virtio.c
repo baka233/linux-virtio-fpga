@@ -95,7 +95,7 @@ static int virtio_enumerate_feature_desc(struct virtio_device *vdev)
 
 	/* hack: add virt enum info */
 	dfl_fpga_enum_info_add_dfl(info, 0, vfdev->port_num);
-	cdev = dfl_fpga_feature_devs_enumerate(info);
+	cdev = dfl_fpga_feature_virtio_devs_enumerate(info);
 	if (IS_ERR(cdev)) {
 		dev_err(cdev->parent, "Enumeration failure\n");
 		ret = PTR_ERR(cdev);
@@ -120,6 +120,8 @@ static int virtio_fpga_probe(struct virtio_device *vdev)
 	ret = virtio_enumerate_feature_desc(vdev);
 	if (ret)
 		goto virtio_deinit_exit;
+
+	return 0;
 
 virtio_deinit_exit:
 	virtio_fpga_deinit(vdev->priv);

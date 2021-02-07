@@ -919,12 +919,9 @@ build_info_create_vdev(struct dfl_fpga_cdev *cdev, enum dfl_id_type type, int po
 
 	/* each sub feature has one MMIO resource */
 	fdev->num_resources = 0;
-	fdev->resource = NULL;
-	if (!fdev->resource)
-		return -ENOMEM;
 
 	ret = platform_device_add(fdev);
-	if (!ret)
+	if (ret)
 		goto err_exit;
 
 	if (type == VPORT_ID)

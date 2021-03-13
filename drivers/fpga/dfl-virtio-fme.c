@@ -51,7 +51,10 @@ static long vfme_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case DFL_FPGA_GET_API_VERSION:
+		return DFL_FPGA_API_VERSION;
 	case DFL_FPGA_CHECK_EXTENSION:
+		// no extension for now
+		return 0;
 	case DFL_FPGA_FME_PORT_PR:
 		/* need to implement */
 		/* ----------------- */

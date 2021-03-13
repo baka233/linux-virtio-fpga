@@ -1,6 +1,7 @@
 //
 // Created by baka233 on 2021/2/4.
 //
+#define DEBUG
 #include <linux/module.h>
 
 #include "dfl-virtio.h"
@@ -19,6 +20,7 @@ static void virtio_fpga_config_changed_work_func(struct work_struct *work)
 
 static int virtio_fpga_init(struct virtio_device *vdev)
 {
+	struct virtio_fpga_port_manager *port_managers;
 	static vq_callback_t *callbacks[] = {
 		virtio_fpga_ctrl_ack
 	};
@@ -42,6 +44,17 @@ static int virtio_fpga_init(struct virtio_device *vdev)
 	virtio_cread_le(vfdev->vdev, struct virtio_fpga_config,
 			port_num, &vfdev->port_num);
 
+	if (vfdev->port_num > MAX_DFL_FPGA_PORT_NUM)
+		goto err_port_num;
+
+	port_managers = kzalloc(sizeof(struct virtio_fpga_port_manager) * vfdev->port_num, GFP_KERNEL);
+	if (!port_managers) {
+		ret = -ENOMEM;
+		goto err_port_num;
+	}
+
+	vfdev->port_managers = port_managers;
+
 	// initial virito vq, porcess dequeu ctrl
 	virtio_fpga_init_vq(&vfdev->ctrlq, virtio_fpga_dequeue_ctrl_func);
 	init_waitqueue_head(&vfdev->resp_wq);
@@ -62,12 +75,14 @@ static int virtio_fpga_init(struct virtio_device *vdev)
 
 	virtio_device_ready(vfdev->vdev);
 
-	dev_dbg(vfdev->dev, "virtio-fpga ready!");
+	dev_info(vfdev->dev, "virtio-fpga ready!");
 
 	return 0;
 err_vbufs:
 	vfdev->vdev->config->del_vqs(vfdev->vdev);
 err_vqs:
+	kfree(port_managers);
+err_port_num:
 	kfree(vfdev);
 	return ret;
 
@@ -135,6 +150,8 @@ static void virtio_fpga_remove(struct virtio_device *vdev)
 	struct virtio_fpga_device *vfdev = vdev->priv;
 	dfl_fpga_feature_vdevs_remove(vfdev->cdev);
 	virtio_fpga_deinit(vfdev);
+	kfree(vfdev->port_managers);
+	kfree(vfdev);
 }
 
 static void virtio_fpga_config_changed(struct virtio_device *vdev)

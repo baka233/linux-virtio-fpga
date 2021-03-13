@@ -5,13 +5,13 @@
 #ifndef __DFL_VIRTIO_H
 #define __DFL_VIRTIO_H
 
-
+#define DEBUG
 #include <linux/fpga-dfl.h>
 #include <linux/virtio.h>
 #include <linux/virtio_ids.h>
 #include <linux/virtio_config.h>
-#include <linux/fpga-dfl.h>
 #include <linux/virtio_fpga.h>
+#include <linux/types.h>
 #include "dfl.h"
 
 
@@ -31,7 +31,7 @@ struct virtio_fpga_queue {
 	struct work_struct dequeue_work;
 };
 
-struct virtio_fpag_port {
+struct virtio_fpga_port {
 	int port_id;
 	struct list_head node;
 };
@@ -52,6 +52,27 @@ struct virtio_fpga_vbuffer
 	struct list_head list;
 };
 
+struct virtio_fpga_port_manager {
+	spinlock_t lock;
+
+	atomic_t get_port_info_pending;
+	struct dfl_fpga_port_info port_info;
+	int get_port_info_err;
+
+	atomic_t get_region_info_pending;
+	struct dfl_fpga_port_region_info region_info;
+	int get_region_info_err;
+
+	atomic_t dma_map_pending;
+	int dma_map_err;
+	struct virtio_fpga_afu_resp_dma_map dma_map;
+	__u64 dma_pfn;
+	__u64 dma_num_pages;
+
+	atomic_t dma_unmap_pending;
+	int dma_unmap_err;
+};
+
 struct virtio_fpga_device {
 	struct device *dev;
 	struct virtio_device *vdev;
@@ -61,12 +82,24 @@ struct virtio_fpga_device {
 	struct kmem_cache *vbufs;
 
 	uint32_t port_num;
+	atomic_t pending_commands;
 
 	struct list_head port_list;
 
 	wait_queue_head_t resp_wq;
+	struct virtio_fpga_port_manager *port_managers;
 	struct work_struct config_changed_work;
 };
+
+#define pdata_cdev_parent(pdata) ((pdata)->dfl_cdev->parent)
+
+#define pdata_get_vdev(pdata) \
+	container_of(pdata_cdev_parent((pdata)), \
+		struct virtio_device, dev)
+
+#define pdata_get_vfdev(pdata) pdata_get_vdev((pdata))->priv
+
+#define pdata_get_port_id(pdata) ((pdata)->dev->id);
 
 
 /* dfl-virtio-vq.c */
@@ -76,22 +109,29 @@ void virtio_fpga_init_vq(struct virtio_fpga_queue *vfvq,
 			 void (*work_func)(struct work_struct *work));
 void virtio_fpga_dequeue_ctrl_func(struct work_struct *work);
 /* fme command */
-void virtio_fpga_cmd_fme_port_pr(struct virtio_fpga_device *vfdev,
+int virtio_fpga_cmd_fme_port_pr(struct virtio_fpga_device *vfdev,
 				 uint32_t port_id,
 				 uint32_t flags,
 				 void* base_addr,
 				 int size);
-void virtio_fpga_cmd_fme_port_reset(struct virtio_fpga_device *vfdev);
+int virtio_fpga_cmd_fme_port_reset(struct virtio_fpga_device *vfdev);
 /* vafu command */
-void virtio_fpga_cmd_get_port_info(struct virtio_fpga_device *vfdev,
-				   uint32_t port_id);
-void virtio_fpga_cmd_get_port_region_info(struct virtio_fpga_device *vfdev,
-					  uint32_t port_id);
-void virtio_fpga_cmd_dma_map(struct virtio_fpga_device *vfdev,
-			     uint32_t port_id);
-void virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfev,
-			       uint32_t port_id);
-void virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
+int virtio_fpga_cmd_get_port_info(struct virtio_fpga_device *vfdev,
+				   uint32_t port_id,
+				   struct dfl_fpga_port_info *pinfo);
+int virtio_fpga_cmd_get_port_region_info(struct virtio_fpga_device *vfdev,
+					  uint32_t port_id,
+					  struct dfl_fpga_port_region_info *region);
+int virtio_fpga_cmd_dma_map(struct virtio_fpga_device *vfdev,
+			     uint32_t flags,
+			     uint32_t port_id,
+			     uint64_t user_addr,
+			     uint64_t len,
+			     uint64_t *iova);
+int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfev,
+			       uint32_t port_id,
+			       uint64_t iova);
+int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 			      uint32_t port_id);
 
 

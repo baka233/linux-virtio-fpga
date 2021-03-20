@@ -342,6 +342,8 @@ struct dfl_feature_ops {
 
 #define DFL_FPGA_FEATURE_DEV_FME		"dfl-fme"
 #define DFL_FPGA_FEATURE_DEV_PORT		"dfl-port"
+#define DFL_FPGA_FEATURE_DEV_VFME		"dfl-virtio-fme"
+#define DFL_FPGA_FEATURE_DEV_VPORT		"dfl-virtio-port"
 
 void dfl_fpga_dev_feature_uinit(struct platform_device *pdev);
 int dfl_fpga_dev_feature_init(struct platform_device *pdev,
@@ -481,6 +483,10 @@ struct dfl_fpga_cdev *
 dfl_fpga_feature_devs_enumerate(struct dfl_fpga_enum_info *info);
 void dfl_fpga_feature_devs_remove(struct dfl_fpga_cdev *cdev);
 
+struct dfl_fpga_cdev*
+dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info, uint32_t has_fme);
+void dfl_fpga_feature_vdevs_remove(struct dfl_fpga_cdev *cdev);
+
 /*
  * need to drop the device reference with put_device() after use port platform
  * device returned by __dfl_fpga_cdev_find_port and dfl_fpga_cdev_find_port
@@ -522,6 +528,8 @@ long dfl_feature_ioctl_set_irq(struct platform_device *pdev,
 enum dfl_id_type {
 	FME_ID,
 	PORT_ID,
+	VFME_ID,
+	VPORT_ID,
 	DFL_ID_MAX,
 };
 

@@ -10,6 +10,7 @@
  *   Wu Hao <hao.wu@intel.com>
  *   Xiao Guangrong <guangrong.xiao@linux.intel.com>
  */
+#define DEBUG
 #include <linux/fpga-dfl.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
@@ -33,6 +34,8 @@ static DEFINE_MUTEX(dfl_id_mutex);
 enum dfl_fpga_devt_type {
 	DFL_FPGA_DEVT_FME,
 	DFL_FPGA_DEVT_PORT,
+	DFL_FPGA_DEVT_VFME,
+	DFL_FPGA_DEVT_VPORT,
 	DFL_FPGA_DEVT_MAX,
 };
 
@@ -63,6 +66,10 @@ static struct dfl_dev_info dfl_devs[] = {
 	 .devt_type = DFL_FPGA_DEVT_FME},
 	{.name = DFL_FPGA_FEATURE_DEV_PORT, .dfh_id = DFH_ID_FIU_PORT,
 	 .devt_type = DFL_FPGA_DEVT_PORT},
+	{.name = DFL_FPGA_FEATURE_DEV_VFME, .dfh_id = DFH_ID_FIU_FME,
+	 .devt_type = DFL_FPGA_DEVT_VFME},
+	{.name = DFL_FPGA_FEATURE_DEV_VPORT, .dfh_id = DFH_ID_FIU_PORT,
+	  .devt_type = DFL_FPGA_DEVT_VPORT},
 };
 
 /**
@@ -79,6 +86,8 @@ struct dfl_chardev_info {
 static struct dfl_chardev_info dfl_chrdevs[] = {
 	{.name = DFL_FPGA_FEATURE_DEV_FME},
 	{.name = DFL_FPGA_FEATURE_DEV_PORT},
+	{.name = DFL_FPGA_FEATURE_DEV_VFME},
+	{.name = DFL_FPGA_FEATURE_DEV_VPORT},
 };
 
 static void dfl_ids_init(void)
@@ -855,6 +864,77 @@ static int build_info_commit_dev(struct build_feature_devs_info *binfo)
 	return ret;
 }
 
+/**
+ *  build_info_ceate_vdev - create new virtio port device and add to port_dev_list
+ *  @cdev: contaier dev which add the port
+ *  @type: port_type
+ *  @port_id
+ */
+static int
+build_info_create_vdev(struct dfl_fpga_cdev *cdev, enum dfl_id_type type, int port_id)
+{
+	struct platform_device *fdev;
+	struct dfl_feature_platform_data *pdata;
+	int ret;
+
+	if (type >= DFL_ID_MAX)
+		return -EINVAL;
+
+	fdev = platform_device_alloc(dfl_devs[type].name, -ENODEV);
+	if (!fdev)
+		return -ENOMEM;
+
+	fdev->id = dfl_id_alloc(type, &fdev->dev);
+	if (fdev->id < 0)
+		return fdev->id;
+	fdev->dev.parent = &cdev->region->dev;
+	fdev->dev.devt = dfl_get_devt(dfl_devs[type].devt_type, fdev->id);
+
+	/*
+	 * we do not need to care for the memory which is associated with
+	 * the platform device. After calling platform_device_unregister(),
+	 * it will be automatically freed by device's release() callback,
+	 * platform_device_release().
+	 */
+	pdata = kzalloc(struct_size(pdata, features, 0), GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
+
+	pdata->dev = fdev;
+	pdata->num = 0;
+	pdata->dfl_cdev = cdev;
+	pdata->id = FEATURE_DEV_ID_UNUSED;
+	mutex_init(&pdata->lock);
+	lockdep_set_class_and_name(&pdata->lock, &dfl_pdata_keys[type],
+				   dfl_pdata_key_strings[type]);
+
+	/*
+	 * the count should be initialized to 0 to make sure
+	 *__fpga_port_enable() following __fpga_port_disable()
+	 * works properly for port device.
+	 * and it should always be 0 for fme device.
+	 */
+	WARN_ON(pdata->disable_count);
+
+	fdev->dev.platform_data = pdata;
+
+	/* each sub feature has one MMIO resource */
+	fdev->num_resources = 0;
+
+	ret = platform_device_add(fdev);
+	if (ret)
+		goto err_exit;
+
+	if (type == VPORT_ID)
+		dfl_fpga_cdev_add_port_dev(cdev, fdev);
+	else
+		cdev->fme_dev =
+			get_device(&fdev->dev);
+
+err_exit:
+	return ret;
+}
+
 static int
 build_info_create_dev(struct build_feature_devs_info *binfo,
 		      enum dfl_id_type type)
@@ -1452,6 +1532,99 @@ free_cdev_exit:
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(dfl_fpga_feature_devs_enumerate);
+
+
+/**
+ * dfl_fpga_feature_virtio_devs_enumerate
+ * @info: information for enum virtio dfl devs
+ */
+struct dfl_fpga_cdev*
+dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info, uint32_t has_fme)
+{
+	struct dfl_fpga_enum_dfl *dfl, *dfl_tmp;
+	struct dfl_fpga_cdev *cdev;
+	int i, ret, port_num;
+
+	if (!info->dev)
+		return ERR_PTR(-ENODEV);
+
+	cdev = devm_kzalloc(info->dev, sizeof(*cdev), GFP_KERNEL);
+	if (!cdev)
+		return ERR_PTR(-ENOMEM);
+
+	cdev->region = devm_fpga_region_create(info->dev, NULL, NULL);
+	if (!cdev->region) {
+		ret = -ENOMEM;
+		goto free_cdev_exit;
+	}
+
+	cdev->parent = info->dev;
+	mutex_init(&cdev->lock);
+	INIT_LIST_HEAD(&cdev->port_dev_list);
+
+	ret = fpga_region_register(cdev->region);
+	if (ret)
+		goto free_cdev_exit;
+
+	if (has_fme) {
+		ret = build_info_create_vdev(cdev, VFME_ID, 0);
+		if (ret) {
+			dev_err(cdev->parent, "create vfme failed");
+			goto free_cdev_exit;
+		}
+	}
+
+	list_for_each_entry_safe(dfl, dfl_tmp, &info->dfls, node) {
+		port_num = dfl->len;
+		list_del(&dfl->node);
+		if (ret) {
+			goto unregister_region_exit;
+		}
+	}
+
+	for (; i < port_num; i++) {
+		ret = build_info_create_vdev(cdev, VPORT_ID, i);
+		if (ret)
+		{
+			remove_feature_devs(cdev);
+			goto unregister_region_exit;
+		}
+	}
+
+	return 0;
+
+unregister_region_exit:
+	fpga_region_unregister(cdev->region);
+free_cdev_exit:
+	devm_kfree(info->dev, cdev);
+	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_GPL(dfl_fpga_feature_virtio_devs_enumerate);
+
+/**
+ * dfl_fpga_feature_vdevs_remove - remove all virtual feature devices
+ * @cdev: fpga container device
+ *
+ * Remove the container device and all feature devices under given container
+ */
+void dfl_fpga_feature_vdevs_remove(struct dfl_fpga_cdev *cdev)
+{
+	struct dfl_feature_platform_data *pdata, *ptmp;
+
+	mutex_lock(&cdev->lock);
+	if (cdev->fme_dev)
+		put_device(cdev->fme_dev);
+
+	list_for_each_entry_safe(pdata, ptmp, &cdev->port_dev_list, node) {
+		struct platform_device *port_dev = pdata->dev;
+		list_del(&pdata->node);
+		put_device(&port_dev->dev);
+	}
+	mutex_unlock(&cdev->lock);
+	fpga_region_unregister(cdev->region);
+	devm_kfree(cdev->parent, cdev);
+}
+EXPORT_SYMBOL_GPL(dfl_fpga_feature_vdevs_remove);
 
 /**
  * dfl_fpga_feature_devs_remove - remove all feature devices

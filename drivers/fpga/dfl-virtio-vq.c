@@ -414,7 +414,7 @@ int virtio_fpga_cmd_get_port_region_info(struct virtio_fpga_device *vfdev,
 	cmd_p->hdr.port_id = cpu_to_le32(port_id);
 	cmd_p->hdr.is_fme = cpu_to_le32(false);
 
-	cmd_p->index = port_id;
+	cmd_p->index = cpu_to_le32(rinfo->index);
 
 	spin_lock(&port_manager->lock);
 	atomic_set(&port_manager->get_region_info_pending, 1);
@@ -541,12 +541,12 @@ int virtio_fpga_cmd_dma_map(struct virtio_fpga_device *vfdev,
 
 	struct mm_struct* mm = vma->vm_mm;
 
-	dev_dbg(vfdev->dev, "vma->start is 0x%0llx", vma->vm_start);
+	dev_dbg(vfdev->dev, "vma->start is 0x%0lx", vma->vm_start);
 
 	mmap_write_lock(mm);
 	ret = remap_pfn_range(vma, vma->vm_start,
 			pfn,
-			num_page, vma->vm_page_prot);
+			len, vma->vm_page_prot);
 	mmap_write_unlock(mm);
 	if (ret != 0) {
 		return ret;
@@ -593,16 +593,18 @@ int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfdev,
 	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
 
 	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
-					   virtio_fpga_cmd_dma_map_cb,
+					   virtio_fpga_cmd_dma_unmap_cb,
 					   &vbuf,
 					   sizeof(*cmd_p),
-					   0,
-					   NULL);
+					   sizeof(struct virtio_fpga_ctrl_hdr),
+					   resp_buf);
 	memset(cmd_p, 0, sizeof(*cmd_p));
 
 	cmd_p->hdr.type = cpu_to_le32(VIRTIO_FPGA_CMD_DMA_UNMAP);
 	cmd_p->hdr.port_id = cpu_to_le32(port_id);
 	cmd_p->hdr.is_fme = cpu_to_le32(false);
+
+	cmd_p->iova = cpu_to_le64(iova);
 
 	spin_lock(&port_manager->lock);
 	atomic_set(&port_manager->dma_unmap_pending, 1);
@@ -623,6 +625,93 @@ int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfdev,
 		return err;
 	}
 
+	spin_unlock(&port_manager->lock);
+
+	return 0;
+}
+
+
+void virtio_fpga_cmd_mmio_map_cb(struct virtio_fpga_device *vfdev,
+				struct virtio_fpga_vbuffer *vbuf)
+{
+	struct virtio_fpga_afu_resp_mmio_map *resp =
+		(struct virtio_fpga_afu_resp_mmio_map*)vbuf->resp_buf;
+	uint32_t port_id = le32_to_cpu(resp->hdr.port_id);
+	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
+
+	spin_lock(&port_manager->lock);
+
+	atomic_set(&port_manager->mmio_map_pending, 0);
+
+	if (resp->hdr.type >= VIRTIO_FPGA_RESP_ERR_UNSPEC) {
+		port_manager->mmio_map_err = -EINVAL;
+		spin_unlock(&port_manager->lock);
+		printk(KERN_ERR "dfl-virtio: map mmio region info failed");
+		wake_up(&vfdev->resp_wq);
+		return;
+	}
+
+	port_manager->mmio_map_pfn = le64_to_cpu(resp->pfn);
+
+	printk(KERN_DEBUG "dfl-virtio: mmio_map, pfn: 0x%16llx", port_manager->mmio_map_pfn);
+
+	wake_up(&vfdev->resp_wq);
+	spin_unlock(&port_manager->lock);
+}
+
+int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
+			     uint32_t port_id,
+			     uint64_t offset,
+			     uint64_t size,
+			     uint64_t* pfn)
+{
+	struct virtio_fpga_afu_mmio_map *cmd_p;
+	struct virtio_fpga_vbuffer *vbuf;
+	void* resp_buf;
+	int ret;
+
+	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_afu_resp_mmio_map),
+			   GFP_KERNEL);
+	if (!resp_buf)
+		return -ENOMEM;
+
+	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
+					   virtio_fpga_cmd_mmio_map_cb,
+					   &vbuf,
+					   sizeof(*cmd_p),
+					   sizeof(struct virtio_fpga_afu_resp_mmio_map),
+					   resp_buf);
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->hdr.type = cpu_to_le32(VIRTIO_FPGA_CMD_MMIO_MAP);
+	cmd_p->hdr.port_id = cpu_to_le32(port_id);
+	cmd_p->hdr.is_fme = cpu_to_le32(false);
+
+	cmd_p->offset = cpu_to_le64(offset);
+	cmd_p->size = cpu_to_le64(size);
+
+	spin_lock(&port_manager->lock);
+	atomic_set(&port_manager->mmio_map_pending, 1);
+	port_manager->mmio_map_err = 0;
+	spin_unlock(&port_manager->lock);
+
+	virtio_fpga_queue_ctrl_buffer(vfdev, vbuf);
+
+	virtio_fpga_notify(vfdev);
+	ret = wait_event_timeout(vfdev->resp_wq,
+				 !atomic_read(&port_manager->mmio_map_pending),
+				 5 * HZ);
+
+	spin_lock(&port_manager->lock);
+	if (port_manager->mmio_map_err) {
+		int err = port_manager->mmio_map_err;
+		spin_unlock(&port_manager->lock);
+		return err;
+	}
+
+	*pfn = le64_to_cpu(port_manager->mmio_map_pfn);
 	spin_unlock(&port_manager->lock);
 
 	return 0;

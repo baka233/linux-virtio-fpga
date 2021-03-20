@@ -17,6 +17,7 @@ enum virtio_fpga_ctrl_type {
 	VIRTIO_FPGA_CMD_DMA_MAP,
 	VIRTIO_FPGA_CMD_DMA_UNMAP,
 	VIRTIO_FPGA_CMD_MMIO_MAP,
+	VIRTIO_FPGA_CMD_MMIO_UNMAP,
 
 	/* ok command */
 	VIRTIO_FPGA_RESP_OK_NODATA = 0x1000,
@@ -29,6 +30,7 @@ enum virtio_fpga_ctrl_type {
 	VIRTIO_FPGA_RESP_ERR_UNSPEC = 0x1100,
 	VIRTIO_FPGA_RESP_ERR_PORT_NOT_EXIST,
 	VIRTIO_FPGA_RESP_ERR_IOVA_NOT_EXIST,
+	VIRTIO_FPGA_RESP_ERR_REGION_NOT_EXIST,
 };
 
 struct virtio_fpga_ctrl_hdr {
@@ -36,7 +38,6 @@ struct virtio_fpga_ctrl_hdr {
 	__le32 flags;
 	__le32 port_id;
 	__le32 is_fme;
-	__le32 padding;
 };
 
 struct virtio_fpga_afu_port_info {
@@ -54,7 +55,6 @@ struct virtio_fpga_afu_region_info {
 	struct virtio_fpga_ctrl_hdr hdr;
 	__le32 index;
 	__le32 padding;
-
 };
 
 struct virtio_fpga_afu_resp_region_info {
@@ -85,6 +85,22 @@ struct virtio_fpga_afu_dma_unmap {
 
 struct virtio_fpga_afu_resp_dma_unmap {
 	struct virtio_fpga_ctrl_hdr hdr;
+};
+
+struct virtio_fpga_afu_mmio_map {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le64 offset;
+	__le64 size;
+};
+
+struct virtio_fpga_afu_resp_mmio_map {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le64 pfn;
+};
+
+struct virtio_fpga_afu_mmio_unmap {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le64 offset;
 };
 
 struct virtio_fpga_config {

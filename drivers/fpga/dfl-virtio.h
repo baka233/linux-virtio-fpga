@@ -66,11 +66,13 @@ struct virtio_fpga_port_manager {
 	atomic_t dma_map_pending;
 	int dma_map_err;
 	struct virtio_fpga_afu_resp_dma_map dma_map;
-	__u64 dma_pfn;
-	__u64 dma_num_pages;
 
 	atomic_t dma_unmap_pending;
 	int dma_unmap_err;
+
+	atomic_t mmio_map_pending;
+	int mmio_map_err;
+	uint64_t mmio_map_pfn;
 };
 
 struct virtio_fpga_device {
@@ -132,7 +134,10 @@ int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfev,
 			       uint32_t port_id,
 			       uint64_t iova);
 int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
-			      uint32_t port_id);
+			     uint32_t port_id,
+			     uint64_t offset,
+			     uint64_t size,
+			     uint64_t* pfn);
 
 
 #endif // __DFL_VIRTIO_H

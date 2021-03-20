@@ -1539,7 +1539,7 @@ EXPORT_SYMBOL_GPL(dfl_fpga_feature_devs_enumerate);
  * @info: information for enum virtio dfl devs
  */
 struct dfl_fpga_cdev*
-dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info)
+dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info, uint32_t has_fme)
 {
 	struct dfl_fpga_enum_dfl *dfl, *dfl_tmp;
 	struct dfl_fpga_cdev *cdev;
@@ -1566,11 +1566,12 @@ dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info)
 	if (ret)
 		goto free_cdev_exit;
 
-	ret = build_info_create_vdev(cdev, VFME_ID, 0);
-	if (ret)
-	{
-		dev_err(cdev->parent, "create vfme failed");
-		goto free_cdev_exit;
+	if (has_fme) {
+		ret = build_info_create_vdev(cdev, VFME_ID, 0);
+		if (ret) {
+			dev_err(cdev->parent, "create vfme failed");
+			goto free_cdev_exit;
+		}
 	}
 
 	list_for_each_entry_safe(dfl, dfl_tmp, &info->dfls, node) {

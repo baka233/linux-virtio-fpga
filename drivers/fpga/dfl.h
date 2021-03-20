@@ -484,7 +484,7 @@ dfl_fpga_feature_devs_enumerate(struct dfl_fpga_enum_info *info);
 void dfl_fpga_feature_devs_remove(struct dfl_fpga_cdev *cdev);
 
 struct dfl_fpga_cdev*
-dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info);
+dfl_fpga_feature_virtio_devs_enumerate(struct dfl_fpga_enum_info *info, uint32_t has_fme);
 void dfl_fpga_feature_vdevs_remove(struct dfl_fpga_cdev *cdev);
 
 /*

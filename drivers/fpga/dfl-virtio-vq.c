@@ -255,7 +255,7 @@ void virtio_fpga_dequeue_ctrl_func(struct work_struct *work)
 
 /* vafu cmd process */
 
-void virtio_fpga_cmd_get_port_info_cb(struct virtio_fpga_device *vfdev,
+static void virtio_fpga_cmd_get_port_info_cb(struct virtio_fpga_device *vfdev,
 				      struct virtio_fpga_vbuffer *vbuf)
 {
 	struct virtio_fpga_afu_resp_port_info *resp =
@@ -353,7 +353,7 @@ int virtio_fpga_cmd_get_port_info(struct virtio_fpga_device *vfdev,
 	return 0;
 }
 
-void virtio_fpga_cmd_get_port_region_info_cb(struct virtio_fpga_device *vfdev,
+static void virtio_fpga_cmd_get_port_region_info_cb(struct virtio_fpga_device *vfdev,
 					     struct virtio_fpga_vbuffer *vbuf)
 {
 	struct virtio_fpga_afu_resp_region_info *resp =
@@ -557,7 +557,7 @@ int virtio_fpga_cmd_dma_map(struct virtio_fpga_device *vfdev,
 	return 0;
 }
 
-void virtio_fpga_cmd_dma_unmap_cb(struct virtio_fpga_device *vfdev,
+static void virtio_fpga_cmd_dma_unmap_cb(struct virtio_fpga_device *vfdev,
 				  struct virtio_fpga_vbuffer *vbuf)
 {
 	struct virtio_fpga_ctrl_hdr *hdr =
@@ -589,6 +589,9 @@ int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfdev,
 	struct virtio_fpga_vbuffer *vbuf;
 	void* resp_buf;
 	int ret;
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_ctrl_hdr),
+			   GFP_KERNEL);
 
 	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
 
@@ -631,7 +634,7 @@ int virtio_fpga_cmd_dma_unmap(struct virtio_fpga_device *vfdev,
 }
 
 
-void virtio_fpga_cmd_mmio_map_cb(struct virtio_fpga_device *vfdev,
+static void virtio_fpga_cmd_mmio_map_cb(struct virtio_fpga_device *vfdev,
 				struct virtio_fpga_vbuffer *vbuf)
 {
 	struct virtio_fpga_afu_resp_mmio_map *resp =
@@ -713,6 +716,251 @@ int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 
 	*pfn = le64_to_cpu(port_manager->mmio_map_pfn);
 	spin_unlock(&port_manager->lock);
+
+	return 0;
+}
+
+
+static void virtio_fpga_cmd_fme_bitstream_build_cb(struct virtio_fpga_device *vfdev,
+						  struct virtio_fpga_vbuffer *vbuf)
+{
+	struct virtio_fpga_ctrl_hdr *resp =
+		(struct virtio_fpga_ctrl_hdr*)vbuf->resp_buf;
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	spin_lock(&fme_manager->lock);
+
+	atomic_set(&fme_manager->pr_pending, 0);
+
+	if (resp->type >= VIRTIO_FPGA_RESP_ERR_UNSPEC) {
+		fme_manager->pr_err = -EINVAL;
+		spin_unlock(&fme_manager->lock);
+		printk(KERN_ERR "dfl-virtio: pr failed");
+		wake_up(&vfdev->resp_wq);
+		return;
+	}
+
+	wake_up(&vfdev->resp_wq);
+	spin_unlock(&fme_manager->lock);
+}
+
+int virtio_fpga_cmd_fme_bitstream_build(struct virtio_fpga_device *vfdev,
+				       struct dfl_fpga_fme_port_pr *info)
+{
+	struct virtio_fpga_fme_bitstream_build *cmd_p;
+	struct virtio_fpga_vbuffer *vbuf;
+	void* resp_buf;
+	int ret;
+
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	BUG_ON(!fme_manager);
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_ctrl_hdr),
+			   GFP_KERNEL);
+	if (!resp_buf)
+		return -ENOMEM;
+
+	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
+					   virtio_fpga_cmd_fme_bitstream_build_cb,
+					   &vbuf,
+					   sizeof(*cmd_p),
+					   sizeof(struct virtio_fpga_ctrl_hdr),
+					   resp_buf);
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->hdr.type = cpu_to_le32(VIRTIO_FPGA_CMD_BITSTREAM_BUILD);
+	cmd_p->hdr.port_id = cpu_to_le32(0);
+	cmd_p->hdr.is_fme = cpu_to_le32(true);
+
+	cmd_p->port_id = cpu_to_le32(info->port_id);
+	cmd_p->length = cpu_to_le64(info->buffer_size);
+	cmd_p->flags = cpu_to_le32(info->flags);
+	cmd_p->addr = cpu_to_le64(info->buffer_address);
+
+	spin_lock(&fme_manager->lock);
+	atomic_set(&fme_manager->pr_pending, 1);
+	fme_manager->pr_err = 0;
+	spin_unlock(&fme_manager->lock);
+
+	virtio_fpga_queue_ctrl_buffer(vfdev, vbuf);
+
+	virtio_fpga_notify(vfdev);
+	ret = wait_event_timeout(vfdev->resp_wq,
+				 !atomic_read(&fme_manager->pr_pending),
+				 5 * HZ);
+
+	spin_lock(&fme_manager->lock);
+	if (fme_manager->pr_err) {
+		int err = fme_manager->pr_err;
+		spin_unlock(&fme_manager->lock);
+		return err;
+	}
+
+	spin_unlock(&fme_manager->lock);
+	return 0;
+}
+
+static void virtio_fpga_cmd_fme_bitstream_mmap_cb(struct virtio_fpga_device *vfdev,
+					  struct virtio_fpga_vbuffer *vbuf)
+{
+	struct virtio_fpga_fme_resp_bitstream_mmap *resp =
+		(struct virtio_fpga_fme_resp_bitstream_mmap*)vbuf->resp_buf;
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	spin_lock(&fme_manager->lock);
+
+	atomic_set(&fme_manager->mmap_pending, 0);
+
+	if (resp->hdr.type >= VIRTIO_FPGA_RESP_ERR_UNSPEC) {
+		fme_manager->mmap_err = -EINVAL;
+		spin_unlock(&fme_manager->lock);
+		printk(KERN_ERR "dfl-virtio: map bitstream region failed");
+		wake_up(&vfdev->resp_wq);
+		return;
+	}
+
+	fme_manager->pfn = le64_to_cpu(resp->pfn);
+
+	printk(KERN_DEBUG "dfl-virtio: bitstream map, pfn: 0x%16llx", fme_manager->pfn);
+
+	wake_up(&vfdev->resp_wq);
+	spin_unlock(&fme_manager->lock);
+}
+
+int virtio_fpga_cmd_fme_bitstream_mmap(struct virtio_fpga_device *vfdev,
+				       uint32_t port_id,
+				       uint64_t length,
+				       uint64_t *pfn) {
+	struct virtio_fpga_fme_bitstream_mmap *cmd_p;
+	struct virtio_fpga_vbuffer *vbuf;
+	void* resp_buf;
+	int ret;
+
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	BUG_ON(!fme_manager);
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_fme_resp_bitstream_mmap),
+			   GFP_KERNEL);
+	if (!resp_buf)
+		return -ENOMEM;
+
+	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
+					   virtio_fpga_cmd_fme_bitstream_mmap_cb,
+					   &vbuf,
+					   sizeof(*cmd_p),
+					   sizeof(struct virtio_fpga_fme_resp_bitstream_mmap),
+					   resp_buf);
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->hdr.type = cpu_to_le32(VIRTIO_FPGA_CMD_BITSTREAM_MMAP);
+	cmd_p->hdr.port_id = cpu_to_le32(0);
+	cmd_p->hdr.is_fme = cpu_to_le32(true);
+
+	cmd_p->port_id = cpu_to_le32(port_id);
+	cmd_p->length = cpu_to_le64(length);
+
+	spin_lock(&fme_manager->lock);
+	atomic_set(&fme_manager->mmap_pending, 1);
+	fme_manager->mmap_err = 0;
+	spin_unlock(&fme_manager->lock);
+
+	virtio_fpga_queue_ctrl_buffer(vfdev, vbuf);
+
+	virtio_fpga_notify(vfdev);
+	ret = wait_event_timeout(vfdev->resp_wq,
+				 !atomic_read(&fme_manager->mmap_pending),
+				 5 * HZ);
+
+	spin_lock(&fme_manager->lock);
+	if (fme_manager->mmap_err) {
+		int err = fme_manager->mmap_err;
+		spin_unlock(&fme_manager->lock);
+		return err;
+	}
+
+	*pfn = le64_to_cpu(fme_manager->pfn);
+	spin_unlock(&fme_manager->lock);
+
+	return 0;
+}
+
+static void virtio_fpga_cmd_fme_bitstream_unmap_cb(struct virtio_fpga_device *vfdev,
+						 struct virtio_fpga_vbuffer *vbuf)
+{
+	struct virtio_fpga_ctrl_hdr *resp =
+		(struct virtio_fpga_ctrl_hdr*)vbuf->resp_buf;
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	spin_lock(&fme_manager->lock);
+
+	atomic_set(&fme_manager->munmap_pending, 0);
+
+	if (resp->type >= VIRTIO_FPGA_RESP_ERR_UNSPEC) {
+		fme_manager->munmap_err = -EINVAL;
+		spin_unlock(&fme_manager->lock);
+		printk(KERN_ERR "dfl-virtio: unmap bistream region failed");
+		wake_up(&vfdev->resp_wq);
+		return;
+	}
+
+	wake_up(&vfdev->resp_wq);
+	spin_unlock(&fme_manager->lock);
+}
+
+
+int virtio_fpga_cmd_fme_bitstream_unmap(struct virtio_fpga_device *vfdev,
+					uint32_t port_id)
+{
+	struct virtio_fpga_fme_bitstream_unmap *cmd_p;
+	struct virtio_fpga_vbuffer *vbuf;
+	void* resp_buf;
+	int ret;
+
+	struct virtio_fpga_fme_manager *fme_manager = vfdev->fme_manager;
+
+	BUG_ON(!fme_manager);
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_ctrl_hdr),
+			   GFP_KERNEL);
+	if (!resp_buf)
+		return -ENOMEM;
+
+	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
+					   virtio_fpga_cmd_fme_bitstream_unmap_cb,
+					   &vbuf,
+					   sizeof(*cmd_p),
+					   sizeof(struct virtio_fpga_ctrl_hdr),
+					   resp_buf);
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->hdr.type = cpu_to_le32(VIRTIO_FPGA_CMD_BITSTREAM_UNMAP);
+	cmd_p->hdr.port_id = cpu_to_le32(0);
+	cmd_p->hdr.is_fme = cpu_to_le32(true);
+
+	cmd_p->port_id = cpu_to_le32(port_id);
+
+	spin_lock(&fme_manager->lock);
+	atomic_set(&fme_manager->munmap_pending, 1);
+	fme_manager->mmap_err = 0;
+	spin_unlock(&fme_manager->lock);
+
+	virtio_fpga_queue_ctrl_buffer(vfdev, vbuf);
+
+	virtio_fpga_notify(vfdev);
+	ret = wait_event_timeout(vfdev->resp_wq,
+				 !atomic_read(&fme_manager->munmap_pending),
+				 5 * HZ);
+
+	spin_lock(&fme_manager->lock);
+	if (fme_manager->munmap_err) {
+		int err = fme_manager->munmap_err;
+		spin_unlock(&fme_manager->lock);
+		return err;
+	}
+
+	spin_unlock(&fme_manager->lock);
 
 	return 0;
 }

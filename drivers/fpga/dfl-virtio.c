@@ -21,6 +21,7 @@ static void virtio_fpga_config_changed_work_func(struct work_struct *work)
 static int virtio_fpga_init(struct virtio_device *vdev)
 {
 	struct virtio_fpga_port_manager *port_managers;
+	struct virtio_fpga_fme_manager *fme_manager;
 	static vq_callback_t *callbacks[] = {
 		virtio_fpga_ctrl_ack
 	};
@@ -43,6 +44,8 @@ static int virtio_fpga_init(struct virtio_device *vdev)
 
 	virtio_cread_le(vfdev->vdev, struct virtio_fpga_config,
 			port_num, &vfdev->port_num);
+	virtio_cread_le(vfdev->vdev, struct virtio_fpga_config,
+			has_fme, &vfdev->has_fme);
 
 	if (vfdev->port_num > MAX_DFL_FPGA_PORT_NUM)
 		goto err_port_num;
@@ -51,6 +54,14 @@ static int virtio_fpga_init(struct virtio_device *vdev)
 	if (!port_managers) {
 		ret = -ENOMEM;
 		goto err_port_num;
+	}
+
+	if (vfdev->has_fme) {
+		fme_manager = kzalloc(sizeof(struct virtio_fpga_fme_manager), GFP_KERNEL);
+		if (!fme_manager) {
+			goto err_fme_alloc;
+		}
+		vfdev->fme_manager = fme_manager;
 	}
 
 	vfdev->port_managers = port_managers;
@@ -82,6 +93,8 @@ err_vbufs:
 	vfdev->vdev->config->del_vqs(vfdev->vdev);
 err_vqs:
 	kfree(port_managers);
+err_fme_alloc:
+	kfree(fme_manager);
 err_port_num:
 	kfree(vfdev);
 	return ret;
@@ -110,7 +123,7 @@ static int virtio_enumerate_feature_desc(struct virtio_device *vdev)
 
 	/* hack: add virt enum info */
 	dfl_fpga_enum_info_add_dfl(info, 0, vfdev->port_num);
-	cdev = dfl_fpga_feature_virtio_devs_enumerate(info);
+	cdev = dfl_fpga_feature_virtio_devs_enumerate(info, vfdev->has_fme);
 	if (IS_ERR(cdev)) {
 		dev_err(cdev->parent, "Enumeration failure\n");
 		ret = PTR_ERR(cdev);
@@ -151,6 +164,7 @@ static void virtio_fpga_remove(struct virtio_device *vdev)
 	dfl_fpga_feature_vdevs_remove(vfdev->cdev);
 	virtio_fpga_deinit(vfdev);
 	kfree(vfdev->port_managers);
+	kfree(vfdev->fme_manager);
 	kfree(vfdev);
 }
 

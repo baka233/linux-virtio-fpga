@@ -52,6 +52,21 @@ struct virtio_fpga_vbuffer
 	struct list_head list;
 };
 
+struct virtio_fpga_fme_manager {
+	spinlock_t lock;
+
+	atomic_t mmap_pending;
+	uint64_t pfn;
+	uint64_t num_page;
+	int mmap_err;
+
+	atomic_t munmap_pending;
+	int munmap_err;
+
+	atomic_t pr_pending;
+	int pr_err;
+};
+
 struct virtio_fpga_port_manager {
 	spinlock_t lock;
 
@@ -84,12 +99,14 @@ struct virtio_fpga_device {
 	struct kmem_cache *vbufs;
 
 	uint32_t port_num;
+	uint32_t has_fme;
 	atomic_t pending_commands;
 
 	struct list_head port_list;
 
 	wait_queue_head_t resp_wq;
 	struct virtio_fpga_port_manager *port_managers;
+	struct virtio_fpga_fme_manager *fme_manager;
 	struct work_struct config_changed_work;
 };
 
@@ -111,11 +128,14 @@ void virtio_fpga_init_vq(struct virtio_fpga_queue *vfvq,
 			 void (*work_func)(struct work_struct *work));
 void virtio_fpga_dequeue_ctrl_func(struct work_struct *work);
 /* fme command */
-int virtio_fpga_cmd_fme_port_pr(struct virtio_fpga_device *vfdev,
-				 uint32_t port_id,
-				 uint32_t flags,
-				 void* base_addr,
-				 int size);
+int virtio_fpga_cmd_fme_bitstream_build(struct virtio_fpga_device *vfdev,
+				       struct dfl_fpga_fme_port_pr *info);
+int virtio_fpga_cmd_fme_bitstream_mmap(struct virtio_fpga_device *vfdev,
+				       uint32_t port_id,
+				       uint64_t length,
+				       uint64_t *pfn);
+int virtio_fpga_cmd_fme_bitstream_unmap(struct virtio_fpga_device *vfdev,
+					uint32_t port_id);
 int virtio_fpga_cmd_fme_port_reset(struct virtio_fpga_device *vfdev);
 /* vafu command */
 int virtio_fpga_cmd_get_port_info(struct virtio_fpga_device *vfdev,

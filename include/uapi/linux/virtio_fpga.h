@@ -18,6 +18,9 @@ enum virtio_fpga_ctrl_type {
 	VIRTIO_FPGA_CMD_DMA_UNMAP,
 	VIRTIO_FPGA_CMD_MMIO_MAP,
 	VIRTIO_FPGA_CMD_MMIO_UNMAP,
+	VIRTIO_FPGA_CMD_BITSTREAM_MMAP,
+	VIRTIO_FPGA_CMD_BITSTREAM_UNMAP,
+	VIRTIO_FPGA_CMD_BITSTREAM_BUILD,
 
 	/* ok command */
 	VIRTIO_FPGA_RESP_OK_NODATA = 0x1000,
@@ -25,6 +28,7 @@ enum virtio_fpga_ctrl_type {
 	VIRTIO_FPGA_RESP_OK_REGION_INFO,
 	VIRTIO_FPGA_RESP_OK_DMA_REGION,
 	VIRTIO_FPGA_RESP_OK_MMIO_MAP,
+	VIRTIO_FPGA_RESP_OK_BITSTREAM_MMAP,
 
 	/* error command */
 	VIRTIO_FPGA_RESP_ERR_UNSPEC = 0x1100,
@@ -105,6 +109,33 @@ struct virtio_fpga_afu_mmio_unmap {
 
 struct virtio_fpga_config {
 	__le32 port_num;
+	__le32 has_fme;
+};
+
+struct virtio_fpga_fme_bitstream_mmap {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le64 length;
+	__le32 port_id;
+	__le32 padding;
+};
+
+struct virtio_fpga_fme_resp_bitstream_mmap {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le64 pfn;
+};
+
+struct virtio_fpga_fme_bitstream_unmap {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le32 port_id;
+	__le32 padding;
+};
+
+struct virtio_fpga_fme_bitstream_build {
+	struct virtio_fpga_ctrl_hdr hdr;
+	__le32 flags;
+	__le32 port_id;
+	__le64 addr;
+	__le64 length;
 };
 
 #define VIRTIO_FPGA_F_VFME 0

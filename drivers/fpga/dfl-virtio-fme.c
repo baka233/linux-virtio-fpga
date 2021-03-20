@@ -2,6 +2,7 @@
 // Created by baka233 on 2021/2/4.
 //
 
+#define DEBUG
 #include <linux/module.h>
 #include "dfl.h"
 #include "dfl-virtio.h"
@@ -42,6 +43,65 @@ static int vfme_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+static int vfme_pr(struct platform_device *pdev, unsigned long arg)
+{
+	struct dfl_feature_platform_data *pdata = dev_get_platdata(&pdev->dev);
+	struct virtio_fpga_device *vfdev = pdata_get_vfdev(pdata);
+	void __user *argp = (void __user *)arg;
+	struct dfl_fpga_fme_port_pr port_pr;
+	unsigned long minsz;
+	void *buf = NULL;
+	size_t length;
+	int ret = 0;
+
+	minsz = offsetofend(struct dfl_fpga_fme_port_pr, buffer_address);
+
+	if (copy_from_user(&port_pr, argp, minsz))
+		return -EFAULT;
+
+	if (port_pr.argsz < minsz || port_pr.flags)
+		return -EINVAL;
+
+	/* TODO: check port id */
+	if (port_pr.port_id >= vfdev->port_num) {
+		return -EINVAL;
+	}
+
+	/*
+	 * align PR buffer per PR bandwidth, as HW ignores the extra padding
+	 * data automatically.
+	 */
+	length = ALIGN(port_pr.buffer_size, 4);
+
+	u64 pfn = 0;
+	ret = virtio_fpga_cmd_fme_bitstream_mmap(vfdev, port_pr.port_id, port_pr.buffer_size, &pfn);
+	if (ret)
+		return ret;
+
+	BUG_ON(!pfn);
+	buf = ioremap(pfn << PAGE_SHIFT, length);
+
+	if (copy_from_user(buf,
+		(void __user *)(unsigned long)port_pr.buffer_address,
+		port_pr.buffer_size)) {
+		ret = -EFAULT;
+		goto free_exit;
+	}
+
+	mutex_lock(&pdata->lock);
+
+	port_pr.buffer_address = pfn << PAGE_SHIFT;
+	ret = virtio_fpga_cmd_fme_bitstream_build(vfdev, &port_pr);
+	if (ret)
+		goto unlock_exit;
+
+unlock_exit:
+	mutex_unlock(&pdata->lock);
+free_exit:
+	virtio_fpga_cmd_fme_bitstream_unmap(vfdev, port_pr.port_id);
+	return ret;
+}
+
 static long vfme_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct dfl_feature_platform_data *pdata = filp->private_data;
@@ -53,18 +113,16 @@ static long vfme_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case DFL_FPGA_GET_API_VERSION:
 		return DFL_FPGA_API_VERSION;
 	case DFL_FPGA_CHECK_EXTENSION:
-		// no extension for now
-		return 0;
+		return -EINVAL;
 	case DFL_FPGA_FME_PORT_PR:
-		/* need to implement */
-		/* ----------------- */
+		return vfme_pr(pdev, arg);
 	default:
-		/* not implement now */
-		break;
+		dev_dbg(&pdev->dev, "%s: unimplemen cmd 0x%x\n", __func__, cmd);
 	}
 
 	return -EINVAL;
 }
+
 
 static const struct file_operations vfme_fops = {
 	.owner		= THIS_MODULE,

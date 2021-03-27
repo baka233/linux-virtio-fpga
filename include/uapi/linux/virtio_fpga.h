@@ -21,6 +21,7 @@ enum virtio_fpga_ctrl_type {
 	VIRTIO_FPGA_CMD_BITSTREAM_MMAP,
 	VIRTIO_FPGA_CMD_BITSTREAM_UNMAP,
 	VIRTIO_FPGA_CMD_BITSTREAM_BUILD,
+	VIRTIO_FPGA_CMD_AFU_RESET,
 
 	/* ok command */
 	VIRTIO_FPGA_RESP_OK_NODATA = 0x1000,
@@ -95,6 +96,8 @@ struct virtio_fpga_afu_mmio_map {
 	struct virtio_fpga_ctrl_hdr hdr;
 	__le64 offset;
 	__le64 size;
+	__le32 flags;
+	__le32 padding;
 };
 
 struct virtio_fpga_afu_resp_mmio_map {

@@ -666,6 +666,7 @@ int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 			     uint32_t port_id,
 			     uint64_t offset,
 			     uint64_t size,
+			     uint32_t flags,
 			     uint64_t* pfn)
 {
 	struct virtio_fpga_afu_mmio_map *cmd_p;
@@ -694,6 +695,7 @@ int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 
 	cmd_p->offset = cpu_to_le64(offset);
 	cmd_p->size = cpu_to_le64(size);
+	cmd_p->flags = cpu_to_le32(flags);
 
 	spin_lock(&port_manager->lock);
 	atomic_set(&port_manager->mmio_map_pending, 1);
@@ -719,6 +721,83 @@ int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 
 	return 0;
 }
+
+
+static void virtio_fpga_afu_reset_cb(struct virtio_fpga_device *vfdev,
+					struct virtio_fpga_vbuffer *vbuf)
+{
+	struct virtio_fpga_ctrl_hdr *resp =
+		(struct virtio_fpga_ctrl_hdr*)vbuf->resp_buf;
+	uint32_t port_id = le32_to_cpu(resp->port_id);
+	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
+
+	spin_lock(&port_manager->lock);
+
+	atomic_set(&port_manager->afu_reset_pending, 0);
+
+	if (resp->type >= VIRTIO_FPGA_RESP_ERR_UNSPEC) {
+		port_manager->afu_reset_err = -EINVAL;
+		spin_unlock(&port_manager->lock);
+		printk(KERN_ERR "dfl-virtio: afu reset failed");
+		wake_up(&vfdev->resp_wq);
+		return;
+	}
+
+	wake_up(&vfdev->resp_wq);
+	spin_unlock(&port_manager->lock);
+}
+
+int virtio_fpga_cmd_afu_reset(struct virtio_fpga_device *vfdev,
+			     uint32_t port_id)
+{
+	struct virtio_fpga_ctrl_hdr *cmd_p;
+	struct virtio_fpga_vbuffer *vbuf;
+	void* resp_buf;
+	int ret;
+
+	struct virtio_fpga_port_manager *port_manager = &vfdev->port_managers[port_id];
+
+	resp_buf = kzalloc(sizeof(struct virtio_fpga_ctrl_hdr),
+			   GFP_KERNEL);
+	if (!resp_buf)
+		return -ENOMEM;
+
+	cmd_p = virtio_fpga_alloc_cmd_resp(vfdev,
+					   virtio_fpga_afu_reset_cb,
+					   &vbuf,
+					   sizeof(*cmd_p),
+					   sizeof(struct virtio_fpga_ctrl_hdr),
+					   resp_buf);
+	memset(cmd_p, 0, sizeof(*cmd_p));
+
+	cmd_p->type = cpu_to_le32(VIRTIO_FPGA_CMD_AFU_RESET);
+	cmd_p->port_id = cpu_to_le32(port_id);
+	cmd_p->is_fme = cpu_to_le32(false);
+
+	spin_lock(&port_manager->lock);
+	atomic_set(&port_manager->afu_reset_pending, 1);
+	port_manager->afu_reset_err = 0;
+	spin_unlock(&port_manager->lock);
+
+	virtio_fpga_queue_ctrl_buffer(vfdev, vbuf);
+
+	virtio_fpga_notify(vfdev);
+	ret = wait_event_timeout(vfdev->resp_wq,
+				 !atomic_read(&port_manager->afu_reset_pending),
+				 5 * HZ);
+
+	spin_lock(&port_manager->lock);
+	if (port_manager->afu_reset_err) {
+		int err = port_manager->afu_reset_err;
+		spin_unlock(&port_manager->lock);
+		return err;
+	}
+	spin_unlock(&port_manager->lock);
+
+	return 0;
+}
+
+
 
 
 static void virtio_fpga_cmd_fme_bitstream_build_cb(struct virtio_fpga_device *vfdev,

@@ -78,6 +78,9 @@ struct virtio_fpga_port_manager {
 	struct dfl_fpga_port_region_info region_info;
 	int get_region_info_err;
 
+	atomic_t afu_reset_pending;
+	int afu_reset_err;
+
 	atomic_t dma_map_pending;
 	int dma_map_err;
 	struct virtio_fpga_afu_resp_dma_map dma_map;
@@ -157,7 +160,10 @@ int virtio_fpga_cmd_mmio_map(struct virtio_fpga_device *vfdev,
 			     uint32_t port_id,
 			     uint64_t offset,
 			     uint64_t size,
+			     uint32_t flags,
 			     uint64_t* pfn);
+int virtio_fpga_cmd_afu_reset(struct virtio_fpga_device *vfdev,
+			      uint32_t port_id);
 
 
 #endif // __DFL_VIRTIO_H

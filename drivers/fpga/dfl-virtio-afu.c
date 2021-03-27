@@ -128,6 +128,18 @@ vafu_ioctl_dma_unmap(struct dfl_feature_platform_data *pdata,
 	return vafu_dma_region_unmap(pdata, unmap.iova);
 }
 
+static long
+vafu_ioctl_port_reset(struct dfl_feature_platform_data *pdata)
+{
+	struct virtio_fpga_device *vfdev;
+	__u32 port_id;
+
+	port_id = pdata_get_port_id(pdata);
+	vfdev = pdata_get_vfdev(pdata);
+
+	return virtio_fpga_cmd_afu_reset(vfdev, port_id);
+}
+
 static int afu_open(struct inode *inode, struct file *filp)
 {
 	struct platform_device *fdev = dfl_fpga_inode_to_feature_dev(inode);
@@ -192,6 +204,8 @@ static long afu_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
 		return vafu_ioctl_dma_map(pdata, (void __user*)args);
 	case DFL_FPGA_PORT_DMA_UNMAP:
 		return vafu_ioctl_dma_unmap(pdata, (void __user*)args);
+	case DFL_FPGA_PORT_RESET:
+		return vafu_ioctl_port_reset(pdata);
 	default:
 		break;
 	}
@@ -296,15 +310,24 @@ static int vafu_dev_init(struct platform_device *pdev)
 
 		dev_info(&pdev->dev, "%s, region_info: index: %d, offset: %lld, size: %lld, flags: %x", __func__, rinfo.index, rinfo.offset, rinfo.size, rinfo.flags);
 
-		ret = virtio_fpga_cmd_mmio_map(vfdev, port_id, rinfo.offset, rinfo.size, &pfn);
-		if (ret)
-			goto destroy_regions;
+		if (rinfo.flags & DFL_PORT_REGION_MMAP) {
+			ret = virtio_fpga_cmd_mmio_map(vfdev, port_id,
+						       rinfo.offset, rinfo.size,
+						       rinfo.flags, &pfn);
+			if (ret)
+				goto destroy_regions;
+		}
 
 		dev_info(&pdev->dev, "%s, region_map pfn: 0x%0llx", __func__, pfn);
 
 		ret = vafu_mmio_region_add(pdata, i, rinfo.size, pfn << PAGE_SHIFT, rinfo.flags);
 		if (ret)
 			goto destroy_regions;
+	}
+
+	ret = virtio_fpga_cmd_afu_reset(vfdev, port_id);
+	if (ret < 0) {
+		dev_warn(&pdev->dev, "reset vafu failed");
 	}
 
 	dev_info(&pdev->dev, "init vafu successfully");
